@@ -1,0 +1,307 @@
+package com.pb.bankautomationsuit.ps.FlowAutomation;
+
+import java.io.BufferedReader;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import org.apache.poi.hssf.usermodel.HSSFCell;
+import org.apache.poi.hssf.usermodel.HSSFRow;
+import org.apache.poi.hssf.usermodel.HSSFSheet;
+import org.apache.poi.hssf.usermodel.HSSFWorkbook;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.Row;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.SpringBootConfiguration;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.http.HttpMethod;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.testng.Assert;
+import org.testng.Reporter;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.paytm.automation.client.utils.BankHttpRequest;
+import com.paytm.automation.client.utils.BankHttpRequestBody;
+import com.paytm.automation.client.utils.BankHttpRequestHeaders;
+import com.paytm.automation.client.utils.GlobalConstants;
+import com.paytm.automation.configuration.SpringConfiguration;
+import com.paytm.automation.ps.client.GetCommonReponseClient;
+import com.paytm.automation.ps.client.ResumeFinProductClient;
+import com.paytm.bankAutomationSuite.testBase.TestBase;
+
+/**
+ * 
+ * @author VINEET KUMAR ON 30-Apr-2018
+ */
+
+@SpringBootTest
+@SpringBootConfiguration
+@ComponentScan({ "com.paytm", "com.paytmbank" })
+@ContextConfiguration(classes = { SpringConfiguration.class })
+public class AccountUtility extends TestBase {
+
+	@Autowired
+	private GetCommonReponseClient getCommonReponseClient;
+
+	@Autowired
+	private ResumeFinProductClient resumeClient;
+
+	Map<String, List<String>> input_data;
+
+	public String ssoToken;
+	public String custId;
+	public String addhaar;
+	public String pan;
+	public String productType;
+
+	public String createISA(String AccountType) throws Exception {
+		input_data = readDataFromXls(1, AccountType);
+		Map.Entry<String, List<String>> entry = input_data.entrySet().iterator().next();
+		addhaar = entry.getValue().get(4);
+		pan = entry.getValue().get(8);
+		if (isUsedDoc(addhaar) || isUsedDoc(pan)) {
+			Reporter.log("Account Creation Failed because KYC data Provided is Already Used.");
+			Assert.fail("KYC data Provided for mobile no :" + entry.getKey()
+					+ " is Already Used!!!.Please try with another KYC Data");
+
+		} else {
+			BankHttpRequest request = getCreateAccountPreSteps(entry, false, true);
+			String createRequestResp = accountSteps.accountCreationTestCases(0, request, entry);
+			int retry = 3;
+			String processIds = GetProcessId(custId).toString();
+			String isaprocessId = processIds.substring(50, 86);
+			String vdcprocessId = processIds.substring(87, 123);
+			while (retry > 0 && !(createRequestResp.equalsIgnoreCase(GlobalConstants.ISSUED))) {
+				resumeFinProduct(isaprocessId, "isa");
+				resumeFinProduct(vdcprocessId, "vdc");
+				Thread.sleep(10000);
+				createRequestResp = checkStatus().get(GlobalConstants.ISA.toLowerCase()).get(GlobalConstants.STATUS)
+						.asText();
+				System.err.println("Fin Product Status " + createRequestResp);
+				retry--;
+				isaprocessId = processIds.substring(87, 123).toString();
+				isaprocessId = processIds.substring(50, 86).toString();
+			}
+			Reporter.log("Account Details");
+			Reporter.log("Mobile No:" + entry.getKey() + "\tCustID: " + custId + "\tSSO-Token: " + ssoToken);
+			writeDataInXls(entry.getKey(), Long.toString(Long.parseLong(entry.getKey()) + 1), 0);
+			Assert.assertEquals(createRequestResp, GlobalConstants.ISSUED);
+		}
+		return entry.getKey();
+	}
+
+	public void deleteData() {
+		deleteFromKYC(addhaar);
+		deleteFromKYC(pan);
+	}
+
+	private BankHttpRequest getCreateAccountPreSteps(Map.Entry<String, List<String>> input_data, boolean isNominee,
+			boolean isVDC) {
+		Map<String, String> responseMap = accountSteps.initialCreateAccountSteps(input_data.getKey());
+		BankHttpRequestHeaders requestHeaders = new BankHttpRequestHeaders();
+		requestHeaders.setNewHeader(GlobalConstants.CACHE_CONTROL, GlobalConstants.NO_CACHE);
+		requestHeaders.setNewHeader(GlobalConstants.CONTENT_TYPE, GlobalConstants.APPLICATION_JSON);
+		ssoToken = responseMap.get(GlobalConstants.SSO_TOKEN);
+		custId = responseMap.get(GlobalConstants.RESOURCE_OWNER_ID);
+		requestHeaders.setNewHeader(GlobalConstants.USER_TOKEN, ssoToken);
+		requestHeaders.setNewHeader(GlobalConstants.RESOURCE_OWNER_ID, custId);
+		MultiValueMap<String, Object> bodyParams = new LinkedMultiValueMap<String, Object>();
+		List<String> productList = new ArrayList<String>();
+		productList.add(GlobalConstants.ISA);
+		productList.add(GlobalConstants.VDC);
+		bodyParams.add(GlobalConstants.PRODUCTS, productList);
+		if (isNominee) {
+			testUtil.fillNomineeDetailsInMap(bodyParams);
+		}
+		bodyParams.add(GlobalConstants.CHANNEL, GlobalConstants.B2C_ANDROID);
+		BankHttpRequestBody requestBody = new BankHttpRequestBody(bodyParams);
+		BankHttpRequest httpRequest = new BankHttpRequest(env.getProperty(GlobalConstants.FIN_PRODUCT_URL),
+				HttpMethod.POST, requestHeaders, requestBody);
+		return httpRequest;
+	}
+
+	public static boolean isUsedDoc(String Doctype) {
+		String docValue;
+		boolean isUsed = true;
+		try {
+			docValue = GetDoctype(Doctype);
+			Class.forName("com.mysql.jdbc.Driver");
+			Connection con = DriverManager.getConnection("jdbc:mysql://10.0.100.59:3310/kyc", "bank_user", "bank_pass");
+			Statement stmt = con.createStatement();
+			ResultSet rs = stmt.executeQuery("select cust_id from kyc_user_doc where doc_value='" + docValue + "'");
+			if (rs.next() == false) {
+				isUsed = false;
+			} else {
+				isUsed = true;
+			}
+			con.close();
+		} catch (IOException | SQLException | ClassNotFoundException e) {
+			e.printStackTrace();
+		}
+		return isUsed;
+	}
+
+	public JsonNode checkStatus() {
+		BankHttpRequestHeaders requestHeaders = new BankHttpRequestHeaders();
+		requestHeaders.setNewHeader(GlobalConstants.USER_TOKEN, ssoToken);
+		BankHttpRequest request = new BankHttpRequest(env.getProperty(GlobalConstants.FIN_PRODUCT_URL), HttpMethod.GET,
+				requestHeaders, null);
+		JsonNode result = getCommonReponseClient.getReponseMessagePS(request);
+		return result;
+	}
+
+	public String GetProcessId(String custId) throws IOException {
+		String target = new String(System.getenv("HOME") + "/getProcessId.sh");
+		ProcessBuilder pb = new ProcessBuilder("/bin/bash", target, custId);
+		Process proc = pb.start();
+		BufferedReader read = new BufferedReader(new InputStreamReader(proc.getInputStream()));
+		return read.readLine();
+	}
+
+	public static String GetDoctype(String docValue) throws IOException {
+		String target = new String(System.getenv("HOME") + "/doctype.sh");
+		ProcessBuilder pb = new ProcessBuilder("/bin/bash", target, docValue);
+		Process proc = pb.start();
+		BufferedReader read = new BufferedReader(new InputStreamReader(proc.getInputStream()));
+		return read.readLine();
+	}
+
+	public void deleteFromKYC(String doctype) {
+		String docValue;
+		try {
+			docValue = GetDoctype(doctype);
+			String deleteQuery = "DELETE FROM kyc_user_doc where id=?;";
+			Class.forName("com.mysql.jdbc.Driver");
+			Connection con = DriverManager.getConnection("jdbc:mysql://10.0.100.59:3310/kyc", "bank_user", "bank_pass");
+			Statement stmt = con.createStatement();
+			PreparedStatement ps = con.prepareStatement(deleteQuery);
+			int id;
+			ResultSet rs = stmt.executeQuery("select id from kyc_user_doc where doc_value='" + docValue + "'");
+			if (rs.next() == false) {
+				Reporter.log("No Data Found for DocValue: " + doctype);
+			} else {
+				id = rs.getInt(1);
+				ps.setInt(1, id);
+				ps.executeUpdate();
+			}
+			con.close();
+		} catch (IOException | SQLException | ClassNotFoundException e) {
+			e.printStackTrace();
+		}
+	}
+
+	@SuppressWarnings("rawtypes")
+	public Map<String, List<String>> readDataFromXls(int column, String value) {
+		String csvFile = env.getProperty(GlobalConstants.TEST_EXCEL_FILE);
+		Map<String, List<String>> inputMap = new HashMap<String, List<String>>();
+		HSSFWorkbook wb;
+		try {
+			wb = new HSSFWorkbook(new FileInputStream(csvFile));
+			HSSFSheet sheet = wb.getSheetAt(0);
+			HSSFRow row;
+			HSSFCell cell;
+			Iterator rows = sheet.rowIterator();
+			while (rows.hasNext()) {
+				row = (HSSFRow) rows.next();
+				String check = row.getCell(column).getStringCellValue();
+				if (check.equals(value)) {
+					List<String> values = new ArrayList<String>();
+
+					Iterator cellItr = row.cellIterator();
+					while (cellItr.hasNext()) {
+						cell = (HSSFCell) cellItr.next();
+						cell.setCellType(Cell.CELL_TYPE_STRING);
+						values.add(readCellValue(cell));
+					}
+					inputMap.put(row.getCell(0).getStringCellValue(), values);
+				}
+			}
+		} catch (FileNotFoundException e) {
+			e.printStackTrace();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		return inputMap;
+	}
+
+	private String readCellValue(Cell cell) {
+		switch (cell.getCellType()) {
+		case Cell.CELL_TYPE_BLANK:
+			return "(blank)";
+		case Cell.CELL_TYPE_BOOLEAN:
+			return String.valueOf(cell.getBooleanCellValue());
+		case Cell.CELL_TYPE_ERROR:
+			return String.valueOf(cell.getErrorCellValue());
+		case Cell.CELL_TYPE_NUMERIC:
+			return String.valueOf(cell.getNumericCellValue());
+		case Cell.CELL_TYPE_STRING:
+			return cell.getStringCellValue();
+		default:
+			return "Unknown type!";
+		}
+	}
+
+	public void writeDataInXls(String match, String value, int column) {
+		String inputFile = env.getProperty(GlobalConstants.TEST_EXCEL_FILE);
+		HSSFWorkbook wb;
+		try {
+			wb = new HSSFWorkbook(new FileInputStream(inputFile));
+			HSSFSheet sheet = wb.getSheetAt(0);
+			int rowIndex = findRow(sheet, match);
+			sheet.getRow(rowIndex).getCell(column).setCellValue(value);
+			FileOutputStream fout = new FileOutputStream(inputFile);
+			wb.write(fout);
+			fout.close();
+		} catch (FileNotFoundException e) {
+			e.printStackTrace();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	private static int findRow(HSSFSheet sheet, String cellContent) {
+		for (Row row : sheet) {
+			for (Cell cell : row) {
+				if (cell.getCellType() == Cell.CELL_TYPE_STRING) {
+					if (cell.getRichStringCellValue().getString().trim().equals(cellContent)) {
+						return row.getRowNum();
+					}
+				}
+			}
+		}
+		return 0;
+	}
+
+	private JsonNode resumeFinProduct(String isaProcessId, String productType) {
+		BankHttpRequestHeaders requestHeaders = new BankHttpRequestHeaders();
+		requestHeaders.setNewHeader(GlobalConstants.USER_TOKEN, ssoToken);
+		requestHeaders.setNewHeader(GlobalConstants.CONTENT_TYPE, GlobalConstants.APPLICATION_JSON);
+		MultiValueMap<String, Object> requestBody = new LinkedMultiValueMap<String, Object>();
+		List<String> processIdArray = new ArrayList<>();
+		processIdArray.add(isaProcessId);
+		requestBody.add(GlobalConstants.CHANNEL, GlobalConstants.B2C_ANDROID);
+		requestBody.add(GlobalConstants.PRODUCT_ENUM, productType);
+		requestBody.add(GlobalConstants.PROCESS_IDS, processIdArray);
+		BankHttpRequestBody body = new BankHttpRequestBody(requestBody);
+		BankHttpRequest request = new BankHttpRequest(env.getProperty(GlobalConstants.FIN_RESUME_URL), HttpMethod.POST,
+				requestHeaders, body);
+		JsonNode result = resumeClient.processResumeFinProduct(request);
+		return result;
+	}
+
+}
