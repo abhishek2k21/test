@@ -1,0 +1,259 @@
+package com.pb.bankautomationsuit.ps.accountController;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.json.JSONException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.SpringBootConfiguration;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.http.HttpMethod;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.testng.Assert;
+import org.testng.Reporter;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.Test;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.paytm.automation.client.utils.BankHttpRequest;
+import com.paytm.automation.client.utils.BankHttpRequestBody;
+import com.paytm.automation.client.utils.BankHttpRequestHeaders;
+import com.paytm.automation.client.utils.GlobalConstants;
+import com.paytm.automation.configuration.SpringConfiguration;
+import com.paytm.automation.ps.client.GetCommonReponseClient;
+import com.paytm.automation.ps.client.ResumeFinProductClient;
+import com.paytm.bankAutomationSuite.testBase.TestBase;
+
+/**
+ * @author KARAN VERMA
+ * ON 28-June-2017
+ */
+@SpringBootTest
+@SpringBootConfiguration
+@ComponentScan({"com.paytm","com.paytmbank"})
+@ContextConfiguration(classes={SpringConfiguration.class})
+public class CreateUserAccountApiTest extends TestBase{
+	
+	@Autowired
+	private GetCommonReponseClient getCommonReponseClient;
+	
+	@Autowired
+	private ResumeFinProductClient resumeClient;
+
+	Map<String,List<String>> input_data;
+	
+	public  String 	ssoToken;
+	public  String 	custId;
+	@BeforeClass
+	public void initInputsList(){
+		Map<String,List<String>> inputMap = testUtil.readDataFromXls(1,"0");
+		input_data = inputMap;
+	}
+		
+	@Test(enabled=true)
+	public void createAccountSuccessTest() throws Exception{
+		Map.Entry<String,List<String>> entry=input_data.entrySet().iterator().next();
+		String addhaar = entry.getValue().get(4);
+		String pan = entry.getValue().get(8);
+		if (isUsedDoc(addhaar) || isUsedDoc(pan)) {
+			Reporter.log("Account Creation Failed because KYC data Provided is Already Used.");
+			Assert.fail("KYC data Provided for mobile no :" + entry.getKey()
+						+ " is Already Used!!!.Please try with another KYC Data");
+		}
+		else {
+		BankHttpRequest request = getCreateAccountPreSteps(entry,false,true);
+		String createRequestResp = accountSteps.accountCreationTestCases(0,request,entry);
+		int retry = 3;
+		String processIds=GetProcessId(custId).toString();
+		String isaprocessId = processIds.substring(50, 86);
+		String vdcprocessId = processIds.substring(87, 123);	
+		while (retry > 0 && !(createRequestResp.equalsIgnoreCase(GlobalConstants.ISSUED))) {
+			resumeFinProduct(isaprocessId,"isa");			
+			resumeFinProduct(vdcprocessId,"vdc");			
+			Thread.sleep(10000);
+			createRequestResp = checkStatus().get(GlobalConstants.ISA.toLowerCase()).get(GlobalConstants.STATUS).asText();
+			System.err.println("Fin Product Status "+createRequestResp);
+			retry--;
+			isaprocessId = processIds.substring(87, 123).toString();
+			isaprocessId = processIds.substring(50, 86).toString();			
+		}
+		Reporter.log("Account Details");
+		Reporter.log("Mobile No:"+entry.getKey()+"\tCustID: "+custId +"\tSSO-Token: "+ssoToken );		
+		input_data.remove(entry.getKey());
+		Assert.assertEquals(createRequestResp, GlobalConstants.ISSUED);	
+		}
+	}
+	
+	@Test(enabled = false)
+	public void createAccountWithVDCSuccessTest() throws Exception{
+		Map.Entry<String,List<String>> entry=input_data.entrySet().iterator().next();
+		BankHttpRequest request = getCreateAccountPreSteps(entry,false,true);
+		String createRequestResp = accountSteps.accountCreationTestCases(0,request,entry);
+		input_data.remove(entry.getKey());
+		Assert.assertEquals(createRequestResp, GlobalConstants.ISSUED);
+	}
+	
+	@Test(testName="CREATE BANK USER ACCOUNT TEST : KYC FAIL",enabled = false)
+	public void createAccountKycFailTest() throws Exception{
+		Map.Entry<String,List<String>> entry=input_data.entrySet().iterator().next();
+		BankHttpRequest request = getCreateAccountPreSteps(entry,false,false);
+		String createRequestResp = accountSteps.accountCreationTestCases(1,request,entry);
+		input_data.remove(entry.getKey());
+		Assert.assertNotEquals(createRequestResp, GlobalConstants.ISSUED,"KYC Fail.");
+	}
+	
+	@Test(enabled = false)
+	public void createAccountPasscodeFailTest() throws Exception{
+		Map.Entry<String,List<String>> entry=input_data.entrySet().iterator().next();
+		BankHttpRequest request = getCreateAccountPreSteps(entry,false,false);
+		String createRequestResp = accountSteps.accountCreationTestCases(2,request,entry);
+		input_data.remove(entry.getKey());
+		Assert.assertNotEquals(createRequestResp, "ISSUED","Passcode Fail.");
+	}
+	
+	@Test(enabled = false)
+	public void createAccountTnCFailTest() throws Exception{
+		Map.Entry<String,List<String>> entry=input_data.entrySet().iterator().next();
+		BankHttpRequest request = getCreateAccountPreSteps(entry,false,false);
+		String createRequestResp = accountSteps.accountCreationTestCases(3,request,entry);
+		input_data.remove(entry.getKey());
+		Assert.assertNotEquals(createRequestResp, "ISSUED","TnC Fail.");
+	}
+	
+	@Test(enabled = false)
+	public void createAccountSuccessWithNominee() throws IOException, JSONException{
+		Map.Entry<String,List<String>> entry=input_data.entrySet().iterator().next();
+		BankHttpRequest request = getCreateAccountPreSteps(entry,true,false);
+		String createRequestResp = accountSteps.accountCreationTestCases(4,request,entry);
+		input_data.remove(entry.getKey());
+		Assert.assertEquals(createRequestResp, "ISSUED");
+	}
+	
+
+	private BankHttpRequest getCreateAccountPreSteps(Map.Entry<String,List<String>> input_data,boolean isNominee,boolean isVDC){
+		Map<String,String> responseMap = accountSteps.initialCreateAccountSteps(input_data.getKey());
+		BankHttpRequestHeaders requestHeaders = new BankHttpRequestHeaders();
+		requestHeaders.setNewHeader(GlobalConstants.CACHE_CONTROL, GlobalConstants.NO_CACHE);
+		requestHeaders.setNewHeader(GlobalConstants.CONTENT_TYPE, GlobalConstants.APPLICATION_JSON);
+		ssoToken=responseMap.get(GlobalConstants.SSO_TOKEN);
+		custId=responseMap.get(GlobalConstants.RESOURCE_OWNER_ID);
+		requestHeaders.setNewHeader(GlobalConstants.USER_TOKEN, ssoToken);
+		requestHeaders.setNewHeader(GlobalConstants.RESOURCE_OWNER_ID, custId);
+		MultiValueMap<String, Object> bodyParams = new LinkedMultiValueMap<String, Object>();
+		List<String> productList = new ArrayList<String>();
+		productList.add(GlobalConstants.ISA);
+		productList.add(GlobalConstants.VDC);
+		bodyParams.add(GlobalConstants.PRODUCTS, productList);
+		if(isNominee){
+			testUtil.fillNomineeDetailsInMap(bodyParams);
+		}
+		bodyParams.add(GlobalConstants.CHANNEL, GlobalConstants.B2C_ANDROID);
+		BankHttpRequestBody requestBody = new BankHttpRequestBody(bodyParams);		
+		BankHttpRequest httpRequest = new BankHttpRequest(env.getProperty(GlobalConstants.FIN_PRODUCT_URL), HttpMethod.POST, requestHeaders, requestBody);
+		return httpRequest;
+	}
+	
+	@Test(enabled = false)
+	public void addNomineeToISAAccountTest(){
+		BankHttpRequestHeaders requestHeaders = new BankHttpRequestHeaders();
+		requestHeaders.setNewHeader(GlobalConstants.CACHE_CONTROL, GlobalConstants.NO_CACHE);
+		requestHeaders.setNewHeader(GlobalConstants.CONTENT_TYPE, GlobalConstants.APPLICATION_JSON);
+		requestHeaders.setNewHeader(GlobalConstants.POSTMAN_TOKEN, "111578f0-cb0f-dbf9-1413-f9af8d71380a");
+		String authCode = testUtil.getOAuthCode("5555577812","test@123",null,null);
+		Map<String,String> authResponseMap = testUtil.getAccessTokenMap(authCode,null);
+		requestHeaders.setNewHeader(GlobalConstants.USER_TOKEN, authResponseMap.get(GlobalConstants.SSO_TOKEN));
+		MultiValueMap<String, Object> bodyParams = new LinkedMultiValueMap<String, Object>();
+		bodyParams.add("name", "talkon");
+		bodyParams.add("active", "true");
+		bodyParams.add("dob", "26/02/1990");
+		bodyParams.add("email", "test@test.in");
+		bodyParams.add("houseNo", "panel1234");
+		bodyParams.add("streetName", "Panlestreeet");
+		bodyParams.add("areaName", "panelarea");
+		bodyParams.add("pinCode", "110064");
+		bodyParams.add("city", "nd");
+		bodyParams.add("state", "delhi");
+		bodyParams.add("relationship", "BROTHER");
+		BankHttpRequestBody requestBody = new BankHttpRequestBody(bodyParams);
+		Map<String,String> urlParams = new HashMap<String,String>();
+		urlParams.put("accountNo","915555577812");
+		String requestUrl = clientUtil.replaceUrlParams(urlParams, env.getProperty(GlobalConstants.ADD_NOMINEE_URL));
+		BankHttpRequest request = new BankHttpRequest(requestUrl, HttpMethod.POST, requestHeaders, requestBody);
+		Map<String,String> response = accountSteps.addNomineeToISA(request);
+		Assert.assertNotNull(response.get(GlobalConstants.NOMINEE_ID));
+	}
+	
+	
+	public static boolean isUsedDoc(String Doctype) {
+		String docValue;
+		boolean isUsed = true;
+		try {
+			docValue = GetDoctype(Doctype);
+			Class.forName("com.mysql.jdbc.Driver");
+			Connection con = DriverManager.getConnection("jdbc:mysql://10.0.100.59:3310/kyc", "bankuser", "bankpass");
+			Statement stmt = con.createStatement();
+			ResultSet rs = stmt.executeQuery("select cust_id from kyc_user_doc where doc_value='" + docValue + "'");
+			if (rs.next() == false) {
+				isUsed = false;
+			} else {
+				isUsed = true;
+			}
+			con.close();
+		} catch (IOException | SQLException | ClassNotFoundException e) {
+			e.printStackTrace();
+		}
+		return isUsed;
+	}
+	
+	public JsonNode checkStatus() {
+		BankHttpRequestHeaders requestHeaders = new BankHttpRequestHeaders();		
+		requestHeaders.setNewHeader(GlobalConstants.USER_TOKEN,ssoToken);	
+		BankHttpRequest request = new BankHttpRequest(env.getProperty(GlobalConstants.FIN_PRODUCT_URL), HttpMethod.GET, requestHeaders, null);
+		JsonNode result = getCommonReponseClient.getReponseMessagePS(request);
+		return result;	
+	}
+	
+	public  String GetProcessId(String custId) throws IOException  {
+		String target = new String(System.getenv("HOME") + "/getProcessId.sh");
+		ProcessBuilder pb = new ProcessBuilder("/bin/bash", target,custId);
+		Process proc = pb.start();
+		BufferedReader read = new BufferedReader(new InputStreamReader(proc.getInputStream()));
+		return read.readLine();
+	}
+	public static String GetDoctype(String docValue) throws IOException {
+		String target = new String(System.getenv("HOME") + "/doctype.sh");
+		ProcessBuilder pb = new ProcessBuilder("/bin/bash", target, docValue);
+		Process proc = pb.start();
+		BufferedReader read = new BufferedReader(new InputStreamReader(proc.getInputStream()));
+		return read.readLine();
+	}
+	private JsonNode resumeFinProduct(String isaProcessId,String productType) {
+		BankHttpRequestHeaders requestHeaders = new BankHttpRequestHeaders();
+		requestHeaders.setNewHeader(GlobalConstants.USER_TOKEN, ssoToken);
+		requestHeaders.setNewHeader(GlobalConstants.CONTENT_TYPE, GlobalConstants.APPLICATION_JSON);
+		MultiValueMap<String, Object> requestBody = new LinkedMultiValueMap<String, Object>();
+		List<String> processIdArray=new ArrayList<>();
+		processIdArray.add(isaProcessId);
+		requestBody.add(GlobalConstants.CHANNEL, GlobalConstants.B2C_ANDROID);
+		requestBody.add(GlobalConstants.PRODUCT_ENUM, productType);
+		requestBody.add(GlobalConstants.PROCESS_IDS,processIdArray);		
+		BankHttpRequestBody body = new BankHttpRequestBody(requestBody);
+		BankHttpRequest request = new BankHttpRequest(env.getProperty(GlobalConstants.FIN_RESUME_URL), HttpMethod.POST,requestHeaders, body);
+		JsonNode result = resumeClient.processResumeFinProduct(request);
+		return result;			
+	}
+	
+}
