@@ -1,0 +1,20 @@
+curl --location --request PUT 'https://kyc-dev.paytmbank.com/kyc/tnc/user' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Basic dGVzdGNsaWVudDo5MzhkZWJjYS02NWQyLTQ1NzEtYTEwZC0xMzQwNTNmNzhkNTE=' \
+--header 'x-jwt-token: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjdXN0X2lkIjoiMTEwNzE5OTQwNyIsImNsaWVudF9pZCI6Im9hdXRoX2NsaWVudCIsInRzIjoiMTU1NDg4NTQ5Nzk4NCJ9.NRFezjtFlc4BOfXjN7ik3xEE5Q161M7_RlqMdh9Ln0s' \
+--header 'Cookie: JSESSIONID=E1A613FDEB19B5B637D76630CD017C8F' \
+--data '{
+    "mode": "esign",
+    "userId": "1001821042",
+    "tnCList": [
+        {
+            "code": "WV_BC_n",
+            "version": 10
+        },
+      {
+            "code": "BankTnc",
+            "version": 1
+       }
+
+    ]
+}'
