@@ -1,0 +1,193 @@
+package com.pb.bankautomationsuit.ps.appController;
+
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNotNull;
+
+import java.util.Map;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.SpringBootConfiguration;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpMethod;
+import org.springframework.test.context.ContextConfiguration;
+import org.testng.Assert;
+import org.testng.Reporter;
+import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.Test;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.paytm.automation.client.utils.BankHttpRequest;
+import com.paytm.automation.client.utils.BankHttpRequestHeaders;
+import com.paytm.automation.client.utils.GlobalConstants;
+import com.paytm.automation.configuration.SpringConfiguration;
+import com.paytm.automation.ps.client.GetCommonReponseClient;
+import com.paytm.bankAutomationSuite.testBase.TestBase;
+
+/**
+ * 
+ * @author VINEET KUMAR ON 29-Mar-2018
+ */
+@SpringBootTest
+@SpringBootConfiguration
+@ContextConfiguration(classes = { SpringConfiguration.class })
+public class GetCustomerProductListAPPTest extends TestBase {
+	@Autowired
+	private GetCommonReponseClient getCommonReponseClient;
+	private String getFinProductUrl;
+	private String accountNo;
+	private String ssoToken;
+	private Map<String, String> accessTokenMap;
+
+	@BeforeMethod
+	public void setUp() {
+		String code = null;
+		try {
+			accountNo = env.getProperty(BENEFICIARY_ACCOUNT);
+			code = testUtil.getOAuthCode(accountNo.substring(2), env.getProperty(ACCOUNT_PASSWORD), null, null);
+			accessTokenMap = testUtil.getAccessTokenMap(code, null);
+			ssoToken = accessTokenMap.get("ssoToken");
+			getFinProductUrl = env.getProperty(GlobalConstants.FIN_PRODUCT_URL);
+		} catch (Exception e) {
+			Reporter.log("Exception Occured while getting ssoToken." + e.getMessage());
+			Assert.fail();
+		}
+	}
+
+	@Test(enabled = true, groups = "GetFinDetailsAPP", description = "To Verify GetFinDetailsAPP with valid data")
+	public void verifyGetFinDetailsAPPWithValidData() {
+		try {
+			BankHttpRequest request = getFinProductRequest();
+			JsonNode result = getCommonReponseClient.getReponseMessagePS(request);
+			if (result.get("isa") != null && result.get("vdc") != null && result.get("pdc") != null
+					&& result.get("slfdIblCifStatus") != null) {
+				VerifyIsaDetails(result);
+				VerifyVdcDetails(result);
+				VerifyPdcDetails(result);
+				VerifyslfdIblCif(result);
+			} else {
+				Assert.fail("Expected result parameters are not found during getFinProduct. Result: " + result);
+			}
+		} catch (Exception e) {
+			Reporter.log("Exception Occurred During Test." + e.getMessage());
+			Assert.fail();
+		}
+	}
+
+	@Test(enabled = true, groups = "GetFinDetailsAPP", description = "To Verify GetFinDetailsAPP without Header")
+	public void verifyGetFinDetailsAPPWithoutHeader() {
+		try {
+
+			BankHttpRequest request = getFinProductRequestWithoutHeader();
+			JsonNode result = getCommonReponseClient.getReponseMessagePS(request);
+			if (result.get("errorMessage") != null && result.get("errorCode") != null
+					&& result.get("documentation") != null) {
+				assertEquals(result.get("errorMessage").asText(),
+						"Missing request header 'User-Token' for method parameter of type String");
+				assertEquals(result.get("errorCode").asText(), "400");
+				assertEquals(result.get("documentation").asText(), "https://www.paytmBankURLToBeReplaceWithPT.com");
+			} else {
+				Assert.fail("Expected result parameters are not found during getFinProduct. Result: " + result);
+			}
+		} catch (Exception e) {
+			Reporter.log("Exception Occurred During Test." + e.getMessage());
+			Assert.fail();
+		}
+	}
+
+	@Test(enabled = true, groups = "GetFinDetailsAPP", description = "To Verify GetFinDetailsAPP with Invalid User Token Header")
+	public void verifyGetFinDetailsAPPWithBlankUserToken() {
+		try {
+			ssoToken = " ";
+			BankHttpRequest request = getFinProductRequest();
+			JsonNode result = getCommonReponseClient.getReponseMessagePS(request);
+			if (result.get("errorMessage") != null && result.get("errorCode") != null
+					&& result.get("documentation") != null) {
+				assertEquals(result.get("errorMessage").asText(), "Null/empty token validation");
+				assertEquals(result.get("errorCode").asText(), "401");
+				assertEquals(result.get("documentation").asText(), "https://www.paytmBankURLToBeReplaceWithPT.com");
+			} else {
+				Assert.fail("Expected result parameters are not found during getFinProduct. Result: " + result);
+			}
+
+		} catch (Exception e) {
+			Reporter.log("Exception Occurred During Test." + e.getMessage());
+			Assert.fail();
+		}
+	}
+
+	@Test(enabled = true, groups = "GetFinDetailsAPP", description = "To Verify GetFinDetailsAPP with Invalid User Token Header")
+	public void verifyGetFinDetailsAPPWithInvalidUserToken() {
+		try {
+			ssoToken = ssoToken.substring(2);
+			BankHttpRequest request = getFinProductRequest();
+			JsonNode result = getCommonReponseClient.getReponseMessagePS(request);
+			if (result.get("errorMessage") != null && result.get("errorCode") != null
+					&& result.get("documentation") != null) {
+				assertEquals(result.get("errorMessage").asText(), "Null response from oauth");
+				assertEquals(result.get("errorCode").asText(), "401");
+				assertEquals(result.get("documentation").asText(), "https://www.paytmBankURLToBeReplaceWithPT.com");
+			} else {
+				Assert.fail("Expected result parameters are not found during getFinProduct. Result: " + result);
+			}
+
+		} catch (Exception e) {
+			Reporter.log("Exception Occurred During Test." + e.getMessage());
+			Assert.fail();
+		}
+	}
+
+	private void VerifyVdcDetails(JsonNode result) {
+		JsonNode vdcDetails = result.get(GlobalConstants.VDC_LOWER);
+		assertEquals(vdcDetails.get("status").asText(), GlobalConstants.ISSUED);
+		assertEquals(vdcDetails.get("cardStatus").asText(), GlobalConstants.NORMAL);
+		assertNotNull(vdcDetails.get("maskedCardNumber"));
+		assertNotNull(vdcDetails.get("cardAlias"));
+	}
+
+	private void VerifyPdcDetails(JsonNode result) {
+		JsonNode pdcDetails = result.get(GlobalConstants.PDC_LOWER);
+		assertNotNull(pdcDetails.get("status"));
+		assertNotNull(pdcDetails.get("maskedCardNumber"));
+		assertNotNull(pdcDetails.get("cardAlias"));
+		assertNotNull(pdcDetails.get("cardStatus"));
+		assertNotNull(pdcDetails.get("imageId"));
+		assertNotNull(pdcDetails.get("walletQRCode"));
+		assertNotNull(pdcDetails.get("orderId"));
+	}
+
+	private void VerifyslfdIblCif(JsonNode result) {
+		JsonNode slfdIblCif = result.get("slfdIblCifStatus");
+		assertNotNull(slfdIblCif.get("status"));
+		assertNotNull(slfdIblCif.get("iblCifId"));
+		assertNotNull(slfdIblCif.get("slfdStatus"));
+		assertNotNull(slfdIblCif.get("productType"));
+		assertNotNull(slfdIblCif.get("processId"));
+	}
+
+	private void VerifyIsaDetails(JsonNode result) {
+		JsonNode isaDetails = result.get(GlobalConstants.ISA_LOWER);
+		assertEquals(isaDetails.get("status").asText(), GlobalConstants.ISSUED);
+		assertEquals(isaDetails.get("accountNumber").asText(), accountNo);
+		assertEquals(isaDetails.get("productType").asText(), "SAIND");
+		assertEquals(isaDetails.get("accountStatus").asText(), GlobalConstants.ACTIVE);
+		assertNotNull(isaDetails.get("productTypeDescription"));
+		assertNotNull(isaDetails.get("ifscCode"));
+		assertNotNull(isaDetails.get("freezeDescriptionList").get(0));
+		assertNotNull(isaDetails.get("freezeDescriptionList").get(0).get("freezeCode"));
+		assertNotNull(isaDetails.get("freezeDescriptionList").get(0).get("freezeReason"));
+	}
+
+	private BankHttpRequest getFinProductRequest() {
+		BankHttpRequestHeaders requestHeaders = new BankHttpRequestHeaders();
+		requestHeaders.setNewHeader(GlobalConstants.USER_TOKEN, ssoToken);
+		BankHttpRequest request = new BankHttpRequest(getFinProductUrl, HttpMethod.GET, requestHeaders, null);
+		return request;
+	}
+
+	private BankHttpRequest getFinProductRequestWithoutHeader() {
+		BankHttpRequestHeaders requestHeaders = new BankHttpRequestHeaders();
+		BankHttpRequest request = new BankHttpRequest(getFinProductUrl, HttpMethod.GET, requestHeaders, null);
+		return request;
+	}
+
+}
